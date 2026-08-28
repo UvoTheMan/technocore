@@ -335,13 +335,9 @@ class TechnocoreChat(App):
                     self.display_queue.popleft()
                     skipped += 1
                 self.display_queue.append(item)
-            if skipped:
-                self.queue_notice_pending = True
-                self.queue_notice_count += skipped
         highest_seq = max(seq for seq, *_ in unseen)
         with self.state_lock:
             self.last_seq = max(self.last_seq, highest_seq)
-        self.displayed_seqs.update(seq for seq, *_ in unseen)
         if initial:
             self.write_message("")
             self.write_message(f"Loaded {len(to_queue)} public messages.")
@@ -356,9 +352,6 @@ class TechnocoreChat(App):
                 self.queue_notice_pending = True
                 self.queue_notice_count += 1
             self.display_queue.append(item)
-            self.displayed_seqs.add(seq)
-        with self.state_lock:
-            self.last_seq = max(self.last_seq, seq)
         return True
 
     def flush_display_queue(self) -> None:
@@ -372,7 +365,8 @@ class TechnocoreChat(App):
             item = self.display_queue.popleft() if self.display_queue else None
         if notice: self.write_message(notice)
         if item:
-            _, timestamp, sender, text = item
+            seq, timestamp, sender, text = item
+            self.displayed_seqs.add(seq)
             self.write_message(self.format_message(timestamp, sender, text))
 
     def format_message(self, timestamp: str, sender: str, text: str) -> str:
@@ -495,35 +489,7 @@ class TechnocoreChat(App):
         if isinstance(payload, dict):
             self.process_messages(payload, initial=False)
             return
-        if not isinstance(payload, str):
-            self.write_message("Message sent, but the server returned an unreadable response.")
-            return
-        found = []
-        for line in payload.splitlines():
-            line = line.strip()
-            if not line.startswith("[") or "] " not in line: continue
-            try:
-                seq_text, remainder = line.split("] ", 1)
-                seq = int(seq_text[1:])
-            except (ValueError, IndexError): continue
-            if " <" in remainder:
-                timestamp, remainder = remainder.split(" <", 1)
-                remainder = "<" + remainder
-            else:
-                timestamp = ""
-            if "> " in remainder:
-                sender, text = remainder.split("> ", 1)
-                sender = sender.lstrip("<")
-            else:
-                sender, text = self.did, remainder
-            found.append((seq, timestamp, sender, text))
-        if not found:
-            self.write_message("Message sent, but no displayable message was returned.")
-            return
-        for seq, timestamp, sender, text in found:
-            if seq in self.displayed_seqs: continue
-            display_sender = self.did if text == sent_text else sender
-            self.queue_display_item((seq, timestamp, display_sender, text))
+        self.write_message("Message accepted by server. Waiting for room feed...")
 
     def handle_send_http_error(self, exc: HTTPError) -> None:
         if self.running: self.write_message(self.format_http_error("Send failed", exc))
