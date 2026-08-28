@@ -77,13 +77,26 @@ def short_did(full: str, seen: list[str], min_chars: int = 8, max_chars: int = 1
 
 
 def request_json(url: str, *, method: str = "GET"):
-    req = Request(url, method=method, headers={"Accept": "application/json", "User-Agent": "technocore-chat/1.3"})
+    req = Request(
+        url,
+        method=method,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "technocore-chat/1.3",
+        },
+    )
+
     with urlopen(req, timeout=REQUEST_TIMEOUT) as response:
-        raw = response.read().decode("utf-8")
-    payload = json.loads(raw)
-    if not isinstance(payload, dict):
-        raise ValueError("Server returned an invalid response.")
-    return payload
+        raw = response.read().decode("utf-8", errors="replace")
+        content_type = response.headers.get("Content-Type", "")
+
+    if "application/json" in content_type:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("Server returned an invalid response.")
+        return payload
+
+    return raw
 
 
 def read_room(room: str, *, since=None, limit=READ_LIMIT, wait=None):
@@ -456,53 +469,63 @@ class TechnocoreChat(App):
                 self.call_from_thread(self.write_message, f"Send failed: {exc}")
 
     def handle_send_success(self, payload) -> None:
-        if not self.running or not isinstance(payload, dict):
+        if not self.running:
             return
 
-        messages = payload.get("messages", [])
-        if not isinstance(messages, list):
+        if isinstance(payload, dict):
+            self.process_messages(payload, initial=False)
             return
 
-        own_messages = []
+        if not isinstance(payload, str):
+            self.write_message("Message sent, but the server returned an unreadable response.")
+            return
 
-        for message in messages:
-            if not isinstance(message, dict):
-                continue
+        found = []
 
-            sender = message.get("from")
-            if sender != self.did:
+        for line in payload.splitlines():
+            line = line.strip()
+
+            if not line.startswith("[") or "] " not in line:
                 continue
 
             try:
-                seq = int(message.get("seq", 0))
-            except (TypeError, ValueError):
+                seq_text, remainder = line.split("] ", 1)
+                seq = int(seq_text[1:])
+            except (ValueError, IndexError):
                 continue
 
-            if seq <= 0 or seq in self.displayed_seqs:
+            if " <" in remainder:
+                timestamp, remainder = remainder.split(" <", 1)
+                remainder = "<" + remainder
+            else:
+                timestamp = ""
+
+            if "> " in remainder:
+                sender, text = remainder.split("> ", 1)
+                sender = sender.lstrip("<")
+            else:
+                sender = self.did
+                text = remainder
+
+            found.append((seq, timestamp, sender, text))
+
+        if not found:
+            self.write_message("Message sent, but no displayable message was returned.")
+            return
+
+        for seq, timestamp, sender, text in found:
+            if seq in self.displayed_seqs:
                 continue
 
-            text = message.get("text", "")
-            timestamp = message.get("ts", "")
+            if sender == self.did:
+                self.write_message(
+                    self.format_message(timestamp, sender, text)
+                )
 
-            if not isinstance(text, str):
-                text = str(text)
-
-            if not isinstance(timestamp, str):
-                timestamp = str(timestamp)
-
-            own_messages.append((seq, timestamp, self.did, text))
-
-        for seq, timestamp, sender, text in sorted(own_messages):
             self.displayed_seqs.add(seq)
 
             with self.state_lock:
                 self.last_seq = max(self.last_seq, seq)
-
-            self.write_message(
-                self.format_message(timestamp, sender, text)
-            )
-
-        self.process_messages(payload, initial=False)
 
     def handle_send_http_error(self, exc: HTTPError) -> None:
         if self.running:
