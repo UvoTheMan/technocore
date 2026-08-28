@@ -78,32 +78,18 @@ def short_did(full: str, seen: list[str], min_chars: int = 8, max_chars: int = 1
 
 
 def request_json(url: str, *, method: str = "GET"):
-    req = Request(
-        url,
-        method=method,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "technocore-chat/1.3",
-        },
-    )
-
+    req = Request(url, method=method, headers={"Accept": "application/json", "User-Agent": "technocore-chat/1.3"})
     with urlopen(req, timeout=REQUEST_TIMEOUT) as response:
         raw_bytes = response.read(MAX_RESPONSE_BYTES + 1)
         content_type = response.headers.get("Content-Type", "")
-
     if len(raw_bytes) > MAX_RESPONSE_BYTES:
-        raise ValueError(
-            f"Server response is too large. Maximum is {MAX_RESPONSE_BYTES} bytes."
-        )
-
+        raise ValueError(f"Server response is too large. Maximum is {MAX_RESPONSE_BYTES} bytes.")
     raw = raw_bytes.decode("utf-8", errors="replace")
-
     if "application/json" in content_type:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise ValueError("Server returned an invalid response.")
         return payload
-
     return raw
 
 
@@ -113,13 +99,11 @@ def read_room(room: str, *, since=None, limit=READ_LIMIT, wait=None):
         query["since"] = str(since)
     if wait is not None and since is not None:
         query["wait"] = str(wait)
-    url = f"{BASE}/r/{quote(room, safe='')}?{urlencode(query)}"
-    return request_json(url)
+    return request_json(f"{BASE}/r/{quote(room, safe='')}?{urlencode(query)}")
 
 
 def sign_message(identity: Ed25519PrivateKey, room: str, nonce: int, text: str) -> str:
-    payload = f"{room}|{nonce}|{text}".encode("utf-8")
-    signature = identity.sign(payload)
+    signature = identity.sign(f"{room}|{nonce}|{text}".encode("utf-8"))
     return base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
 
 
@@ -140,7 +124,6 @@ def send_signed_message(identity: Ed25519PrivateKey, did: str, room: str, text: 
 class TechnocoreChat(App):
     TITLE = "Technocore Chat"
     SUB_TITLE = "Public DID-based rooms"
-
     CSS = """
     Screen { background: $background; }
     #room_header { height: 3; padding: 0 1; border-bottom: solid $panel; }
@@ -187,14 +170,8 @@ class TechnocoreChat(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        messages = self.query_one("#messages", RichLog)
-        messages.write("Welcome to Technocore Chat")
-        messages.write("")
-        messages.write("Messages in this room are public and cryptographically signed.")
-        messages.write("")
-        messages.write(f"Your DID: {self.did}")
-        messages.write("")
-        messages.write("Connecting to #lobby...")
+        for line in ("Welcome to Technocore Chat", "", "Messages in this room are public and cryptographically signed.", "", f"Your DID: {self.did}", "", "Connecting to #lobby..."):
+            self.write_message(line)
         self.query_one("#message_input", Input).focus()
         self.display_timer = self.set_interval(DISPLAY_INTERVAL, self.flush_display_queue)
         self.load_initial_messages()
@@ -234,44 +211,38 @@ class TechnocoreChat(App):
                 with self.state_lock:
                     current_seq = self.last_seq
                 payload = read_room(self.room, since=current_seq, limit=READ_LIMIT, wait=POLL_WAIT)
-                if not self.running:
-                    break
-                self.call_from_thread(self.handle_poll_success, payload)
+                if self.running:
+                    self.call_from_thread(self.handle_poll_success, payload)
             except HTTPError as exc:
-                if not self.running:
-                    break
+                if not self.running: break
                 self.call_from_thread(self.handle_poll_http_error, exc)
                 self.stop_or_wait(RECONNECT_DELAY)
             except (URLError, TimeoutError) as exc:
-                if not self.running:
-                    break
+                if not self.running: break
                 self.call_from_thread(self.handle_poll_network_error, exc)
                 self.stop_or_wait(RECONNECT_DELAY)
             except Exception as exc:
-                if not self.running:
-                    break
+                if not self.running: break
                 self.call_from_thread(self.handle_poll_error, exc)
                 self.stop_or_wait(RECONNECT_DELAY)
 
     def handle_poll_success(self, payload) -> None:
-        if not self.running:
-            return
-        self.connected = True
-        self.update_connection("● Connected")
-        self.process_messages(payload, initial=False)
+        if self.running:
+            self.connected = True
+            self.update_connection("● Connected")
+            self.process_messages(payload, initial=False)
 
     def handle_poll_http_error(self, exc: HTTPError) -> None:
         self.connected = False
         if exc.code == 429:
             self.update_connection("● Rate limited")
             self.write_message("Server rate limit reached. Retrying soon.")
-            return
-        if 500 <= exc.code <= 599:
+        elif 500 <= exc.code <= 599:
             self.update_connection("● Server error")
             self.write_message(self.format_http_error("Server error", exc))
-            return
-        self.update_connection("● Reconnecting...")
-        self.write_message(self.format_http_error("Connection error", exc))
+        else:
+            self.update_connection("● Reconnecting...")
+            self.write_message(self.format_http_error("Connection error", exc))
 
     def handle_poll_network_error(self, exc: Exception) -> None:
         self.connected = False
@@ -287,8 +258,7 @@ class TechnocoreChat(App):
         end = time.monotonic() + seconds
         while self.running:
             remaining = end - time.monotonic()
-            if remaining <= 0:
-                return
+            if remaining <= 0: return
             time.sleep(min(0.25, remaining))
 
     def normalize_messages(self, payload):
@@ -299,15 +269,10 @@ class TechnocoreChat(App):
             raise ValueError("Server returned invalid message data.")
         normalized = []
         for message in room_messages:
-            if not isinstance(message, dict):
-                continue
-            try:
-                seq = int(message.get("seq", 0))
-            except (TypeError, ValueError):
-                continue
-            if seq <= 0:
-                continue
-            normalized.append((seq, message))
+            if not isinstance(message, dict): continue
+            try: seq = int(message.get("seq", 0))
+            except (TypeError, ValueError): continue
+            if seq > 0: normalized.append((seq, message))
         normalized.sort(key=lambda item: item[0])
         return normalized
 
@@ -317,44 +282,32 @@ class TechnocoreChat(App):
         except ValueError as exc:
             self.write_message(str(exc))
             return
-
         unseen = []
         with self.state_lock:
             current_last_seq = self.last_seq
-
         for seq, message in normalized:
             if seq <= current_last_seq or seq in self.displayed_seqs:
                 continue
             sender = message.get("from", "unknown")
             text = message.get("text", "")
             timestamp = message.get("ts", "")
-            if not isinstance(sender, str):
-                sender = "unknown"
-            if not isinstance(text, str):
-                text = str(text)
-            if not isinstance(timestamp, str):
-                timestamp = str(timestamp)
-            if sender and sender not in self.seen_dids:
-                self.seen_dids.append(sender)
+            if not isinstance(sender, str): sender = "unknown"
+            if not isinstance(text, str): text = str(text)
+            if not isinstance(timestamp, str): timestamp = str(timestamp)
+            if sender and sender not in self.seen_dids: self.seen_dids.append(sender)
             unseen.append((seq, timestamp, sender, text))
-
         if not unseen:
             server_last_seq = payload.get("last_seq")
             if server_last_seq is not None:
                 try:
-                    server_last_seq = int(server_last_seq)
-                    with self.state_lock:
-                        self.last_seq = max(self.last_seq, server_last_seq)
-                except (TypeError, ValueError):
-                    pass
+                    with self.state_lock: self.last_seq = max(self.last_seq, int(server_last_seq))
+                except (TypeError, ValueError): pass
             if initial:
                 self.write_message("")
                 self.write_message("Loaded 0 new public messages.")
             return
-
         to_queue = unseen[-INITIAL_READ_LIMIT:] if initial else unseen
         skipped = len(unseen) - len(to_queue)
-
         with self.queue_lock:
             for item in to_queue:
                 if len(self.display_queue) >= MAX_DISPLAY_QUEUE:
@@ -364,21 +317,31 @@ class TechnocoreChat(App):
             if skipped:
                 self.queue_notice_pending = True
                 self.queue_notice_count += skipped
-
         highest_seq = max(seq for seq, *_ in unseen)
         with self.state_lock:
             self.last_seq = max(self.last_seq, highest_seq)
-
-        for seq, *_ in unseen:
-            self.displayed_seqs.add(seq)
-
+        self.displayed_seqs.update(seq for seq, *_ in unseen)
         if initial:
             self.write_message("")
             self.write_message(f"Loaded {len(to_queue)} public messages.")
 
+    def queue_display_item(self, item) -> None:
+        seq = item[0]
+        with self.queue_lock:
+            if seq in self.displayed_seqs:
+                return False
+            if len(self.display_queue) >= MAX_DISPLAY_QUEUE:
+                self.display_queue.popleft()
+                self.queue_notice_pending = True
+                self.queue_notice_count += 1
+            self.display_queue.append(item)
+            self.displayed_seqs.add(seq)
+        with self.state_lock:
+            self.last_seq = max(self.last_seq, seq)
+        return True
+
     def flush_display_queue(self) -> None:
-        if not self.running:
-            return
+        if not self.running: return
         notice = None
         with self.queue_lock:
             if self.queue_notice_pending:
@@ -386,10 +349,9 @@ class TechnocoreChat(App):
                 self.queue_notice_pending = False
                 self.queue_notice_count = 0
             item = self.display_queue.popleft() if self.display_queue else None
-        if notice:
-            self.write_message(notice)
+        if notice: self.write_message(notice)
         if item:
-            seq, timestamp, sender, text = item
+            _, timestamp, sender, text = item
             self.write_message(self.format_message(timestamp, sender, text))
 
     def format_message(self, timestamp: str, sender: str, text: str) -> str:
@@ -397,13 +359,10 @@ class TechnocoreChat(App):
         return f"{timestamp} {display_sender}  {text}"
 
     def format_http_error(self, prefix: str, exc: HTTPError) -> str:
-        try:
-            body = exc.read().decode("utf-8", errors="replace").strip()
-        except Exception:
-            body = ""
+        try: body = exc.read().decode("utf-8", errors="replace").strip()
+        except Exception: body = ""
         result = f"{prefix} ({exc.code})"
-        if body:
-            result += f": {body}"
+        if body: result += f": {body}"
         return result
 
     def format_network_error(self, exc: Exception) -> str:
@@ -411,33 +370,22 @@ class TechnocoreChat(App):
         return str(reason) if reason else str(exc)
 
     def write_message(self, text: str) -> None:
-        if not self.running:
-            return
-        self.query_one("#messages", RichLog).write(text)
+        if self.running: self.query_one("#messages", RichLog).write(text)
 
     def update_connection(self, text: str) -> None:
-        if not self.running:
-            return
-        self.query_one("#connection", Label).update(text)
+        if self.running: self.query_one("#connection", Label).update(text)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         event.input.value = ""
-        if not text:
-            return
-        if text.startswith("/"):
-            self.handle_command(text)
-        else:
-            self.send_message(text)
+        if not text: return
+        if text.startswith("/"): self.handle_command(text)
+        else: self.send_message(text)
 
     def handle_command(self, command: str) -> None:
         name = command.split(maxsplit=1)[0].lower()
-        if name == "/quit":
-            self.exit_chat()
-            return
-        if name == "/help":
-            self.write_message("Commands: /help /tutorial /from /seen /full /quit")
-            return
+        if name == "/quit": self.exit_chat(); return
+        if name == "/help": self.write_message("Commands: /help /tutorial /from /seen /full /quit"); return
         if name == "/tutorial":
             self.write_message("Type a message and press Enter to send it.")
             self.write_message("Use /from to see your DID.")
@@ -445,16 +393,11 @@ class TechnocoreChat(App):
             self.write_message("Use /full to display your complete DID.")
             self.write_message("Use /quit to exit.")
             return
-        if name == "/from":
-            self.write_message(f"You are {short_did(self.did, self.seen_dids)}")
-            return
-        if name == "/full":
-            self.write_message(self.did)
-            return
+        if name == "/from": self.write_message(f"You are {short_did(self.did, self.seen_dids)}"); return
+        if name == "/full": self.write_message(self.did); return
         if name == "/seen":
             self.write_message(f"Seen identities: {len(self.seen_dids)}")
-            for did in self.seen_dids:
-                self.write_message(f"  {short_did(did, self.seen_dids)}")
+            for did in self.seen_dids: self.write_message(f"  {short_did(did, self.seen_dids)}")
             return
         self.write_message(f"Unknown command: {name}")
 
@@ -465,79 +408,55 @@ class TechnocoreChat(App):
         try:
             payload = send_signed_message(self.identity, self.did, self.room, text)
             if self.running:
-                self.call_from_thread(self.handle_send_success, payload)
+                self.call_from_thread(self.handle_send_success, payload, text)
         except HTTPError as exc:
-            if self.running:
-                self.call_from_thread(self.handle_send_http_error, exc)
+            if self.running: self.call_from_thread(self.handle_send_http_error, exc)
         except (URLError, TimeoutError) as exc:
-            if self.running:
-                self.call_from_thread(self.write_message, f"Send failed: {self.format_network_error(exc)}")
+            if self.running: self.call_from_thread(self.write_message, f"Send failed: {self.format_network_error(exc)}")
         except Exception as exc:
-            if self.running:
-                self.call_from_thread(self.write_message, f"Send failed: {exc}")
+            if self.running: self.call_from_thread(self.write_message, f"Send failed: {exc}")
 
-    def handle_send_success(self, payload) -> None:
-        if not self.running:
-            return
-
+    def handle_send_success(self, payload, sent_text: str) -> None:
+        if not self.running: return
         if isinstance(payload, dict):
             self.process_messages(payload, initial=False)
             return
-
         if not isinstance(payload, str):
             self.write_message("Message sent, but the server returned an unreadable response.")
             return
-
         found = []
-
         for line in payload.splitlines():
             line = line.strip()
-
-            if not line.startswith("[") or "] " not in line:
-                continue
-
+            if not line.startswith("[") or "] " not in line: continue
             try:
                 seq_text, remainder = line.split("] ", 1)
                 seq = int(seq_text[1:])
-            except (ValueError, IndexError):
-                continue
-
+            except (ValueError, IndexError): continue
             if " <" in remainder:
                 timestamp, remainder = remainder.split(" <", 1)
                 remainder = "<" + remainder
             else:
                 timestamp = ""
-
             if "> " in remainder:
                 sender, text = remainder.split("> ", 1)
                 sender = sender.lstrip("<")
             else:
-                sender = self.did
-                text = remainder
-
+                sender, text = self.did, remainder
             found.append((seq, timestamp, sender, text))
-
         if not found:
             self.write_message("Message sent, but no displayable message was returned.")
             return
-
         for seq, timestamp, sender, text in found:
-            if seq in self.displayed_seqs:
-                continue
-
-            if sender == self.did:
-                self.write_message(
-                    self.format_message(timestamp, sender, text)
-                )
-
-            self.displayed_seqs.add(seq)
-
-            with self.state_lock:
-                self.last_seq = max(self.last_seq, seq)
+            if seq in self.displayed_seqs: continue
+            # The signed-send endpoint's plain-text response abbreviates DIDs.
+            # This response is the direct acknowledgement of this client's send,
+            # so display the acknowledged line as our own message and put it through
+            # the same paced queue as polled messages.
+            display_sender = self.did if text == sent_text else sender
+            self.queue_display_item((seq, timestamp, display_sender, text))
 
     def handle_send_http_error(self, exc: HTTPError) -> None:
-        if self.running:
-            self.write_message(self.format_http_error("Send failed", exc))
+        if self.running: self.write_message(self.format_http_error("Send failed", exc))
 
     def exit_chat(self) -> None:
         self.running = False
