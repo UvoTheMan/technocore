@@ -26,6 +26,7 @@ INITIAL_READ_LIMIT = 20
 POLL_WAIT = 10
 RECONNECT_DELAY = 2
 REQUEST_TIMEOUT = 20
+MAX_RESPONSE_BYTES = 512 * 1024
 MAX_DISPLAYED_MESSAGES = 300
 DISPLAY_INTERVAL = 0.25
 MAX_DISPLAY_QUEUE = 500
@@ -87,8 +88,15 @@ def request_json(url: str, *, method: str = "GET"):
     )
 
     with urlopen(req, timeout=REQUEST_TIMEOUT) as response:
-        raw = response.read().decode("utf-8", errors="replace")
+        raw_bytes = response.read(MAX_RESPONSE_BYTES + 1)
         content_type = response.headers.get("Content-Type", "")
+
+    if len(raw_bytes) > MAX_RESPONSE_BYTES:
+        raise ValueError(
+            f"Server response is too large. Maximum is {MAX_RESPONSE_BYTES} bytes."
+        )
+
+    raw = raw_bytes.decode("utf-8", errors="replace")
 
     if "application/json" in content_type:
         payload = json.loads(raw)
