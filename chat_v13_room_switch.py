@@ -336,10 +336,12 @@ class TechnocoreChat(App):
                     continue
                 if len(self.display_queue) >= MAX_DISPLAY_QUEUE:
                     dropped = self.display_queue.popleft()
+                    self.displayed_seqs.add(dropped[0])
                     self.queued_seqs.discard(dropped[0])
                     skipped += 1
                 self.display_queue.append(item)
                 self.queued_seqs.add(seq)
+                self.displayed_seqs.add(seq)
             if skipped:
                 self.queue_notice_pending = True
                 self.queue_notice_count += skipped
@@ -360,6 +362,7 @@ class TechnocoreChat(App):
                 self.queue_notice_count = 0
             item = self.display_queue.popleft() if self.display_queue else None
             if item:
+                self.displayed_seqs.add(item[0])
                 self.queued_seqs.discard(item[0])
         if notice: self.write_message(notice)
         if item:
@@ -488,16 +491,7 @@ class TechnocoreChat(App):
         if not self.running or room_at_send != self.room:
             return
         if isinstance(payload, dict):
-            self.process_messages(payload, initial=False, force_latest=True)
-        try:
-            refreshed = read_room(room_at_send, limit=READ_LIMIT)
-            self.process_messages(refreshed, initial=False, force_latest=True)
-        except HTTPError as exc:
-            self.write_message(self.format_http_error("Room refresh after send failed", exc))
-        except (URLError, TimeoutError) as exc:
-            self.write_message(f"Room refresh after send failed: {self.format_network_error(exc)}")
-        except Exception as exc:
-            self.write_message(f"Room refresh after send failed: {exc}")
+            self.process_messages(payload, initial=False)
 
     def handle_send_http_error(self, exc: HTTPError) -> None:
         if self.running: self.write_message(self.format_http_error("Send failed", exc))
