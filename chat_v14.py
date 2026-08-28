@@ -1,8 +1,8 @@
 """Technocore Chat v14.
 
-Uses the tested v13 room-switch implementation as the functional core and
-adds the final presentation layer without replacing its command, polling,
-room-switching, message-queue, signing, or security logic.
+Final presentation layer on top of the tested v13 room-switch core.
+All commands, polling, room switching, message queueing, signing, and
+security behavior remain inherited from v13.
 """
 
 from chat_v13_room_switch import (
@@ -14,67 +14,20 @@ from chat_v13_room_switch import (
 
 
 class TechnocoreChat(V13TechnocoreChat):
+    TITLE = "Technocore Chat"
+    SUB_TITLE = "Public DID-based rooms"
+
     CSS = """
-    Screen {
-        background: $background;
-    }
-
-    #room_header {
-        height: 4;
-        padding: 0 2;
-        border-bottom: solid $panel;
-    }
-
-    #room_name {
-        width: 1fr;
-        content-align: left middle;
-        text-style: bold;
-    }
-
-    #connection {
-        width: auto;
-        min-width: 20;
-        content-align: right middle;
-    }
-
-    #identity {
-        height: 2;
-        padding: 0 2;
-        color: $text-muted;
-        content-align: left middle;
-    }
-
-    #messages {
-        height: 1fr;
-        border: round $panel;
-        padding: 1 2;
-        margin: 0 1;
-        scrollbar-size: 1 1;
-        scrollbar-gutter: stable;
-    }
-
-    #composer {
-        height: 4;
-        padding: 0 1;
-        border-top: solid $panel;
-    }
-
-    #prompt {
-        width: 3;
-        content-align: center middle;
-        text-style: bold;
-    }
-
-    #message_input {
-        width: 1fr;
-        border: round $panel;
-    }
-
-    #hint {
-        height: 1;
-        padding: 0 2;
-        color: $text-muted;
-    }
+    Screen { background: $background; }
+    #room_header { height: 4; padding: 0 2; border-bottom: solid $panel; }
+    #room_name { width: 1fr; content-align: left middle; text-style: bold; }
+    #connection { width: auto; min-width: 20; content-align: right middle; }
+    #identity { height: 2; padding: 0 2; color: $text-muted; content-align: left middle; }
+    #messages { height: 1fr; border: round $panel; padding: 1 2; margin: 0 1; scrollbar-size: 1 1; scrollbar-gutter: stable; }
+    #composer { height: 4; padding: 0 1; border-top: solid $panel; }
+    #prompt { width: 3; content-align: center middle; text-style: bold; }
+    #message_input { width: 1fr; border: round $panel; }
+    #hint { height: 1; padding: 0 2; color: $text-muted; }
     """
 
 
