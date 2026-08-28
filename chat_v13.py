@@ -456,8 +456,53 @@ class TechnocoreChat(App):
                 self.call_from_thread(self.write_message, f"Send failed: {exc}")
 
     def handle_send_success(self, payload) -> None:
-        if self.running:
-            self.process_messages(payload, initial=False)
+        if not self.running or not isinstance(payload, dict):
+            return
+
+        messages = payload.get("messages", [])
+        if not isinstance(messages, list):
+            return
+
+        own_messages = []
+
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+
+            sender = message.get("from")
+            if sender != self.did:
+                continue
+
+            try:
+                seq = int(message.get("seq", 0))
+            except (TypeError, ValueError):
+                continue
+
+            if seq <= 0 or seq in self.displayed_seqs:
+                continue
+
+            text = message.get("text", "")
+            timestamp = message.get("ts", "")
+
+            if not isinstance(text, str):
+                text = str(text)
+
+            if not isinstance(timestamp, str):
+                timestamp = str(timestamp)
+
+            own_messages.append((seq, timestamp, self.did, text))
+
+        for seq, timestamp, sender, text in sorted(own_messages):
+            self.displayed_seqs.add(seq)
+
+            with self.state_lock:
+                self.last_seq = max(self.last_seq, seq)
+
+            self.write_message(
+                self.format_message(timestamp, sender, text)
+            )
+
+        self.process_messages(payload, initial=False)
 
     def handle_send_http_error(self, exc: HTTPError) -> None:
         if self.running:
