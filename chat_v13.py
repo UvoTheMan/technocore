@@ -7,6 +7,7 @@ import base64
 import json
 import threading
 import time
+from collections import deque
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -19,15 +20,15 @@ IDENTITY_PATH = Path("identity.pem")
 BASE = "https://technocore.chat"
 ROOM = "lobby"
 ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-
 MAX_MESSAGE_LENGTH = 4096
 READ_LIMIT = 50
 INITIAL_READ_LIMIT = 20
 POLL_WAIT = 10
 RECONNECT_DELAY = 2
 REQUEST_TIMEOUT = 20
-MAX_LIVE_MESSAGES_PER_UPDATE = 6
 MAX_DISPLAYED_MESSAGES = 300
+DISPLAY_INTERVAL = 0.25
+MAX_DISPLAY_QUEUE = 500
 
 
 def base58btc_encode(data: bytes) -> str:
@@ -69,24 +70,14 @@ def short_did(full: str, seen: list[str], min_chars: int = 8, max_chars: int = 1
     key = full.removeprefix("did:key:")
     for length in range(min_chars, max_chars + 1, 2):
         suffix = key[-length:]
-        matches = [
-            did for did in set(seen)
-            if did.removeprefix("did:key:")[-length:] == suffix
-        ]
+        matches = [did for did in set(seen) if did.removeprefix("did:key:")[-length:] == suffix]
         if len(matches) <= 1:
             return "…" + suffix
     return full
 
 
 def request_json(url: str, *, method: str = "GET"):
-    req = Request(
-        url,
-        method=method,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "technocore-chat/1.3",
-        },
-    )
+    req = Request(url, method=method, headers={"Accept": "application/json", "User-Agent": "technocore-chat/1.3"})
     with urlopen(req, timeout=REQUEST_TIMEOUT) as response:
         raw = response.read().decode("utf-8")
     payload = json.loads(raw)
@@ -117,14 +108,11 @@ def send_signed_message(identity: Ed25519PrivateKey, did: str, room: str, text: 
         raise ValueError("Message cannot be empty.")
     if len(text) > MAX_MESSAGE_LENGTH:
         raise ValueError(f"Message is too long. Maximum is {MAX_MESSAGE_LENGTH} characters.")
-
     nonce = time.time_ns() // 1_000_000
     signature = sign_message(identity, room, nonce, text)
-    url = (
-        f"{BASE}/r/{quote(room, safe='')}/say-signed/"
-        f"{quote(did, safe='')}/{quote(signature, safe='')}/"
-        f"{nonce}/{quote(text, safe='')}"
-    )
+    url = (f"{BASE}/r/{quote(room, safe='')}/say-signed/"
+           f"{quote(did, safe='')}/{quote(signature, safe='')}/"
+           f"{nonce}/{quote(text, safe='')}")
     return request_json(url)
 
 
@@ -156,7 +144,12 @@ class TechnocoreChat(App):
         self.seen_dids: list[str] = [did]
         self.displayed_seqs: set[int] = set()
         self.state_lock = threading.Lock()
+        self.queue_lock = threading.Lock()
+        self.display_queue = deque()
+        self.queue_notice_pending = False
+        self.queue_notice_count = 0
         self.poll_thread: threading.Thread | None = None
+        self.display_timer = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -164,13 +157,7 @@ class TechnocoreChat(App):
             yield Label("# lobby", id="room_name")
             yield Label("● Connecting...", id="connection")
         yield Static(f"Identity: {short_did(self.did, self.seen_dids)}", id="identity")
-        yield RichLog(
-            id="messages",
-            wrap=True,
-            markup=False,
-            auto_scroll=True,
-            max_lines=MAX_DISPLAYED_MESSAGES,
-        )
+        yield RichLog(id="messages", wrap=True, markup=False, auto_scroll=True, max_lines=MAX_DISPLAYED_MESSAGES)
         with Container(id="composer"):
             with Horizontal():
                 yield Label(">", id="prompt")
@@ -188,6 +175,7 @@ class TechnocoreChat(App):
         messages.write("")
         messages.write("Connecting to #lobby...")
         self.query_one("#message_input", Input).focus()
+        self.display_timer = self.set_interval(DISPLAY_INTERVAL, self.flush_display_queue)
         self.load_initial_messages()
 
     def load_initial_messages(self) -> None:
@@ -216,11 +204,7 @@ class TechnocoreChat(App):
     def start_polling(self) -> None:
         if self.poll_thread and self.poll_thread.is_alive():
             return
-        self.poll_thread = threading.Thread(
-            target=self.poll_loop,
-            name="technocore-poller",
-            daemon=True,
-        )
+        self.poll_thread = threading.Thread(target=self.poll_loop, name="technocore-poller", daemon=True)
         self.poll_thread.start()
 
     def poll_loop(self) -> None:
@@ -228,12 +212,7 @@ class TechnocoreChat(App):
             try:
                 with self.state_lock:
                     current_seq = self.last_seq
-                payload = read_room(
-                    self.room,
-                    since=current_seq,
-                    limit=READ_LIMIT,
-                    wait=POLL_WAIT,
-                )
+                payload = read_room(self.room, since=current_seq, limit=READ_LIMIT, wait=POLL_WAIT)
                 if not self.running:
                     break
                 self.call_from_thread(self.handle_poll_success, payload)
@@ -297,7 +276,6 @@ class TechnocoreChat(App):
         room_messages = payload.get("messages", [])
         if not isinstance(room_messages, list):
             raise ValueError("Server returned invalid message data.")
-
         normalized = []
         for message in room_messages:
             if not isinstance(message, dict):
@@ -320,29 +298,23 @@ class TechnocoreChat(App):
             return
 
         unseen = []
+        with self.state_lock:
+            current_last_seq = self.last_seq
+
         for seq, message in normalized:
+            if seq <= current_last_seq or seq in self.displayed_seqs:
+                continue
             sender = message.get("from", "unknown")
             text = message.get("text", "")
             timestamp = message.get("ts", "")
-
             if not isinstance(sender, str):
                 sender = "unknown"
             if not isinstance(text, str):
                 text = str(text)
             if not isinstance(timestamp, str):
                 timestamp = str(timestamp)
-
             if sender and sender not in self.seen_dids:
                 self.seen_dids.append(sender)
-
-            if seq in self.displayed_seqs:
-                continue
-
-            with self.state_lock:
-                current_last_seq = self.last_seq
-            if seq <= current_last_seq:
-                continue
-
             unseen.append((seq, timestamp, sender, text))
 
         if not unseen:
@@ -359,35 +331,45 @@ class TechnocoreChat(App):
                 self.write_message("Loaded 0 new public messages.")
             return
 
-        if initial:
-            to_display = unseen[-INITIAL_READ_LIMIT:]
-        else:
-            to_display = unseen[-MAX_LIVE_MESSAGES_PER_UPDATE:]
+        to_queue = unseen[-INITIAL_READ_LIMIT:] if initial else unseen
+        skipped = len(unseen) - len(to_queue)
 
-        skipped = len(unseen) - len(to_display)
-        if skipped > 0:
-            self.write_message(f"[{skipped} earlier messages received and skipped from the live view]")
+        with self.queue_lock:
+            for item in to_queue:
+                if len(self.display_queue) >= MAX_DISPLAY_QUEUE:
+                    self.display_queue.popleft()
+                    skipped += 1
+                self.display_queue.append(item)
+            if skipped:
+                self.queue_notice_pending = True
+                self.queue_notice_count += skipped
 
-        for seq, timestamp, sender, text in to_display:
-            self.write_message(self.format_message(timestamp, sender, text))
-            self.displayed_seqs.add(seq)
-
-        # Advance the sequence through every received message so a busy room
-        # cannot repeatedly replay the same backlog. Only the newest messages
-        # are rendered when traffic arrives in a large burst.
         highest_seq = max(seq for seq, *_ in unseen)
         with self.state_lock:
             self.last_seq = max(self.last_seq, highest_seq)
 
-        # Mark skipped messages as seen so they aren't rendered again.
         for seq, *_ in unseen:
             self.displayed_seqs.add(seq)
 
         if initial:
             self.write_message("")
-            self.write_message(f"Loaded {len(to_display)} public messages.")
-        elif skipped > 0:
-            self.write_message(f"Live view showing the newest {len(to_display)} messages from this update.")
+            self.write_message(f"Loaded {len(to_queue)} public messages.")
+
+    def flush_display_queue(self) -> None:
+        if not self.running:
+            return
+        notice = None
+        with self.queue_lock:
+            if self.queue_notice_pending:
+                notice = f"[{self.queue_notice_count} messages skipped from the live display because traffic was too fast]"
+                self.queue_notice_pending = False
+                self.queue_notice_count = 0
+            item = self.display_queue.popleft() if self.display_queue else None
+        if notice:
+            self.write_message(notice)
+        if item:
+            seq, timestamp, sender, text = item
+            self.write_message(self.format_message(timestamp, sender, text))
 
     def format_message(self, timestamp: str, sender: str, text: str) -> str:
         display_sender = "You" if sender == self.did else short_did(sender, self.seen_dids)
@@ -456,12 +438,7 @@ class TechnocoreChat(App):
         self.write_message(f"Unknown command: {name}")
 
     def send_message(self, text: str) -> None:
-        threading.Thread(
-            target=self.send_worker,
-            args=(text,),
-            name="technocore-sender",
-            daemon=True,
-        ).start()
+        threading.Thread(target=self.send_worker, args=(text,), name="technocore-sender", daemon=True).start()
 
     def send_worker(self, text: str) -> None:
         try:
@@ -473,10 +450,7 @@ class TechnocoreChat(App):
                 self.call_from_thread(self.handle_send_http_error, exc)
         except (URLError, TimeoutError) as exc:
             if self.running:
-                self.call_from_thread(
-                    self.write_message,
-                    f"Send failed: {self.format_network_error(exc)}",
-                )
+                self.call_from_thread(self.write_message, f"Send failed: {self.format_network_error(exc)}")
         except Exception as exc:
             if self.running:
                 self.call_from_thread(self.write_message, f"Send failed: {exc}")
@@ -498,7 +472,8 @@ def main():
     identity = load_identity(IDENTITY_PATH)
     did = derive_did(identity)
     print(f"Identity: {did}")
-    TechnocoreChat(identity, did).run()
+    app = TechnocoreChat(identity, did)
+    app.run()
 
 
 if __name__ == "__main__":
