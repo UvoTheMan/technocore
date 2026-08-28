@@ -30,7 +30,7 @@ REQUEST_TIMEOUT = 20
 MAX_RESPONSE_BYTES = 512 * 1024
 MAX_DISPLAYED_MESSAGES = 300
 DISPLAY_INTERVAL = 0.25
-MAX_DISPLAY_QUEUE = 500
+MAX_DISPLAY_QUEUE = 80
 MAX_ROOM_LENGTH = 64
 ROOM_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -339,7 +339,10 @@ class TechnocoreChat(App):
                     self.displayed_seqs.add(dropped[0])
                     self.queued_seqs.discard(dropped[0])
                     skipped += 1
-                self.display_queue.append(item)
+                if sender == self.did:
+                    self.display_queue.appendleft(item)
+                else:
+                    self.display_queue.append(item)
                 self.queued_seqs.add(seq)
                 self.displayed_seqs.add(seq)
             if skipped:
