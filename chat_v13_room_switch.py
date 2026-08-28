@@ -31,8 +31,8 @@ MAX_RESPONSE_BYTES = 512 * 1024
 MAX_DISPLAYED_MESSAGES = 300
 DISPLAY_INTERVAL = 0.25
 MAX_DISPLAY_QUEUE = 80
-MAX_ROOM_LENGTH = 64
-ROOM_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+MAX_ROOM_LENGTH = 48
+ROOM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 
 
 def base58btc_encode(data: bytes) -> str:
@@ -78,7 +78,7 @@ def short_did(full: str, seen: list[str], min_chars: int = 8, max_chars: int = 1
 
 
 def request_json(url: str, *, method: str = "GET"):
-    req = Request(url, method=method, headers={"Accept": "application/json", "User-Agent": "technocore-chat/1.3"})
+    req = Request(url, method=method, headers={"Accept": "application/json", "User-Agent": "technocore-chat/1.4.0"})
     with urlopen(req, timeout=REQUEST_TIMEOUT) as response:
         raw_bytes = response.read(MAX_RESPONSE_BYTES + 1)
         content_type = response.headers.get("Content-Type", "")
@@ -389,7 +389,9 @@ class TechnocoreChat(App):
         return str(reason) if reason else str(exc)
 
     def write_message(self, text: str) -> None:
-        if self.running: self.query_one("#messages", RichLog).write(text)
+        if self.running:
+            log = self.query_one("#messages", RichLog)
+            log.write(text)
 
     def update_connection(self, text: str) -> None:
         if self.running: self.query_one("#connection", Label).update(text)
