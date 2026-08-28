@@ -1,8 +1,6 @@
-"""Technocore Chat v14.
+"""Technocore Chat v14 final UI build.
 
-Final presentation layer on top of the tested v13 room-switch core.
-All commands, polling, room switching, message queueing, signing, and
-security behavior remain inherited from v13.
+This file is the presentation layer over the tested v13 room-switch core.
 """
 
 from chat_v13_room_switch import (
